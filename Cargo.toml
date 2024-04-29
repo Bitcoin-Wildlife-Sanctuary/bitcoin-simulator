@@ -1,0 +1,15 @@
+[package]
+name = "bitcoin-simulator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+anyhow = "1.0.82"
+bitcoin = "0.32.0"
+
+[profile.dev]
+opt-level = 3
+
+[profile.release]
+lto = true
