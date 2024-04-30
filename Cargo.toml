@@ -8,6 +8,8 @@ rusqlite = { version = "0.31.0", features = ["bundled"] }
 anyhow = "1.0.82"
 bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin", branch = "bitvm" }
 bitcoin-script = { git = "https://github.com/BitVM/rust-bitcoin-script" }
+bitcoin-scriptexec = { git = "https://github.com/BitVM/rust-bitcoin-scriptexec" }
+secp256k1 = "0.29.0"
 
 [profile.dev]
 opt-level = 3
