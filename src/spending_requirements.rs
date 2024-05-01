@@ -45,17 +45,13 @@ impl P2WSHChecker {
             witness,
         )
         .map_err(|_| Error::msg("The script cannot be executed."))?;
-        println!("{:?}", exec.stack());
         loop {
             if exec.exec_next().is_err() {
                 break;
             }
-            println!("{:?}", exec.stack());
         }
         let res = exec.result().unwrap();
         if !res.success {
-            println!("{:?}", res.final_stack);
-            println!("{:?}", res.error);
             return Err(Error::msg("The script execution is not successful."));
         }
 
@@ -130,8 +126,6 @@ impl P2TRChecker {
         }
         let res = exec.result().unwrap();
         if !res.success {
-            println!("{:?}", res.final_stack);
-            println!("{:?}", res.error);
             return Err(Error::msg("The script execution is not successful."));
         }
 
