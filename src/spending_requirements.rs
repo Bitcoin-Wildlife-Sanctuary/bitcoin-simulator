@@ -282,7 +282,6 @@ mod test {
             },
             input.witness,
         );
-        println!("{:?}", res);
         assert!(res.is_ok());
     }
 }
