@@ -1,11 +1,7 @@
 use anyhow::{Error, Result};
 use bitcoin::key::TweakedPublicKey;
-use bitcoin::secp256k1::Secp256k1;
 use bitcoin::taproot::ControlBlock;
-use bitcoin::{
-    secp256k1, Script, ScriptBuf, Witness, WitnessProgram, WitnessVersion, XOnlyPublicKey,
-};
-use bitcoin_script::script;
+use bitcoin::{secp256k1, Script, ScriptBuf, Witness, WitnessProgram, XOnlyPublicKey};
 use bitcoin_scriptexec::{Exec, ExecCtx, Options, TxTemplate};
 
 pub struct P2WSHChecker;
@@ -47,14 +43,19 @@ impl P2WSHChecker {
             tx_template,
             ScriptBuf::from_bytes(script.to_vec()),
             witness,
-        )?;
+        )
+        .map_err(|_| Error::msg("The script cannot be executed."))?;
+        println!("{:?}", exec.stack());
         loop {
             if exec.exec_next().is_err() {
                 break;
             }
+            println!("{:?}", exec.stack());
         }
         let res = exec.result().unwrap();
         if !res.success {
+            println!("{:?}", res.final_stack);
+            println!("{:?}", res.error);
             return Err(Error::msg("The script execution is not successful."));
         }
 
@@ -69,7 +70,7 @@ impl P2TRChecker {
         let sig_pub_key_bytes = sig_pub_key.as_bytes();
 
         let witness_version = sig_pub_key_bytes[0];
-        if witness_version != 1 {
+        if witness_version != 0x51 {
             return Err(Error::msg("The ScriptPubKey is not for Taproot."));
         }
 
@@ -86,6 +87,8 @@ impl P2TRChecker {
             annex = Some(witness.pop().unwrap());
         }
 
+        _ = annex;
+
         if witness.len() == 1 {
             return Err(Error::msg(
                 "The key path spending of Taproot is not implemented.",
@@ -99,18 +102,187 @@ impl P2TRChecker {
         let secp = secp256k1::Secp256k1::new();
 
         let control_block = ControlBlock::decode(&witness.pop().unwrap())?;
-        let script = Script::from_bytes(&witness.pop().unwrap());
+        let script_buf = witness.pop().unwrap();
+        let script = Script::from_bytes(&script_buf);
 
-        let out_pk = XOnlyPublicKey::from_slice(sig_pub_key_bytes)?;
+        let out_pk = XOnlyPublicKey::from_slice(&sig_pub_key_bytes[2..])?;
         let out_pk = TweakedPublicKey::dangerous_assume_tweaked(out_pk);
 
-        let res = control_block.verify_taproot_commitment(&secp, out_pk.to_inner(), script)?;
+        let res = control_block.verify_taproot_commitment(&secp, out_pk.to_inner(), script);
         if !res {
             return Err(Error::msg(
                 "The taproot commitment does not match the Taproot public key.",
             ));
         }
 
+        let mut exec = Exec::new(
+            ExecCtx::Tapscript,
+            Options::default(),
+            tx_template,
+            ScriptBuf::from_bytes(script_buf),
+            witness,
+        )
+        .map_err(|_| Error::msg("The script cannot be executed."))?;
+        loop {
+            if exec.exec_next().is_err() {
+                break;
+            }
+        }
+        let res = exec.result().unwrap();
+        if !res.success {
+            println!("{:?}", res.final_stack);
+            println!("{:?}", res.error);
+            return Err(Error::msg("The script execution is not successful."));
+        }
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::pushable;
+    use crate::spending_requirements::{P2TRChecker, P2WSHChecker};
+    use bitcoin::absolute::LockTime;
+    use bitcoin::hashes::Hash;
+    use bitcoin::key::UntweakedPublicKey;
+    use bitcoin::script::scriptint_vec;
+    use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+    use bitcoin::transaction::Version;
+    use bitcoin::{
+        Amount, OutPoint, Script, ScriptBuf, Sequence, TapLeafHash, TxIn, TxOut, Witness,
+        WitnessProgram,
+    };
+    use bitcoin_script::script;
+    use bitcoin_scriptexec::TxTemplate;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_p2wsh() {
+        let witness_program = WitnessProgram::p2wsh(Script::from_bytes(
+            &script! {
+                { 1234 } OP_EQUAL
+            }
+            .to_bytes(),
+        ));
+
+        let output = TxOut {
+            value: Amount::from_sat(1_000_000_000),
+            script_pubkey: ScriptBuf::new_witness_program(&witness_program),
+        };
+
+        let tx = bitcoin::Transaction {
+            version: Version(1),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![output.clone()],
+        };
+
+        let tx_id = tx.compute_txid();
+
+        let mut witness = Witness::new();
+        witness.push([]);
+        witness.push(scriptint_vec(1234));
+        witness.push(script! { { 1234 } OP_EQUAL }.to_bytes());
+
+        let input = TxIn {
+            previous_output: OutPoint::new(tx_id, 0),
+            script_sig: ScriptBuf::default(),
+            sequence: Sequence::MAX,
+            witness: witness,
+        };
+
+        let tx2 = bitcoin::Transaction {
+            version: Version(1),
+            lock_time: LockTime::ZERO,
+            input: vec![input.clone()],
+            output: vec![],
+        };
+
+        let res = P2WSHChecker::check(
+            output.script_pubkey.clone(),
+            TxTemplate {
+                tx: tx2,
+                prevouts: vec![output],
+                input_idx: 0,
+                taproot_annex_scriptleaf: None,
+            },
+            input.witness,
+        );
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_p2tr() {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let internal_key = UntweakedPublicKey::from(
+            bitcoin::secp256k1::PublicKey::from_str(
+                "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0",
+            )
+            .unwrap(),
+        );
+
+        let script = script! {
+            { 1234 } OP_EQUAL
+        };
+
+        let taproot_builder = TaprootBuilder::new().add_leaf(0, script.clone()).unwrap();
+        let taproot_spend_info = taproot_builder.finalize(&secp, internal_key).unwrap();
+
+        let witness_program =
+            WitnessProgram::p2tr(&secp, internal_key, taproot_spend_info.merkle_root());
+
+        let output = TxOut {
+            value: Amount::from_sat(1_000_000_000),
+            script_pubkey: ScriptBuf::new_witness_program(&witness_program),
+        };
+
+        let tx = bitcoin::Transaction {
+            version: Version(1),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![output.clone()],
+        };
+
+        let tx_id = tx.compute_txid();
+
+        let mut control_block_bytes = Vec::new();
+        taproot_spend_info
+            .control_block(&(script, LeafVersion::TapScript))
+            .unwrap()
+            .encode(&mut control_block_bytes)
+            .unwrap();
+
+        let mut witness = Witness::new();
+        witness.push(scriptint_vec(1234));
+        witness.push(script! { { 1234 } OP_EQUAL }.to_bytes());
+        witness.push(control_block_bytes);
+
+        let input = TxIn {
+            previous_output: OutPoint::new(tx_id, 0),
+            script_sig: ScriptBuf::default(),
+            sequence: Sequence::MAX,
+            witness,
+        };
+
+        let tx2 = bitcoin::Transaction {
+            version: Version(1),
+            lock_time: LockTime::ZERO,
+            input: vec![input.clone()],
+            output: vec![],
+        };
+
+        let res = P2TRChecker::check(
+            output.script_pubkey.clone(),
+            TxTemplate {
+                tx: tx2,
+                prevouts: vec![output],
+                input_idx: 0,
+                taproot_annex_scriptleaf: Some((TapLeafHash::all_zeros(), None)),
+            },
+            input.witness,
+        );
+        println!("{:?}", res);
+        assert!(res.is_ok());
     }
 }

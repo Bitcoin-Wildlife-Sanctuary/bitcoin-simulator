@@ -107,6 +107,7 @@ mod test {
     use crate::database::Database;
     use crate::pushable;
     use bitcoin::absolute::LockTime;
+    use bitcoin::script::scriptint_vec;
     use bitcoin::transaction::Version;
     use bitcoin::{
         Amount, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut, Witness, WitnessProgram,
@@ -119,7 +120,7 @@ mod test {
 
         let witness_program = WitnessProgram::p2wsh(Script::from_bytes(
             &script! {
-                { 1234 } OP_EQUALVERIFY
+                { 1234 } OP_EQUAL
             }
             .to_bytes(),
         ));
@@ -145,11 +146,16 @@ mod test {
             false
         );
 
+        let mut witness = Witness::new();
+        witness.push([]);
+        witness.push(scriptint_vec(1234));
+        witness.push(script! { { 1234 } OP_EQUAL }.to_bytes());
+
         let input = TxIn {
             previous_output: OutPoint::new(tx_id, 0),
             script_sig: ScriptBuf::default(),
             sequence: Sequence::MAX,
-            witness: Witness::from(vec![script! { {1234} }.to_bytes()]),
+            witness: witness,
         };
 
         let tx2 = bitcoin::Transaction {
