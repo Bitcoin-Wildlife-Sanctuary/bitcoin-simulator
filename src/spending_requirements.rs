@@ -183,7 +183,7 @@ mod test {
             previous_output: OutPoint::new(tx_id, 0),
             script_sig: ScriptBuf::default(),
             sequence: Sequence::MAX,
-            witness: witness,
+            witness,
         };
 
         let tx2 = bitcoin::Transaction {
@@ -242,7 +242,7 @@ mod test {
 
         let mut control_block_bytes = Vec::new();
         taproot_spend_info
-            .control_block(&(script, LeafVersion::TapScript))
+            .control_block(&(script.clone(), LeafVersion::TapScript))
             .unwrap()
             .encode(&mut control_block_bytes)
             .unwrap();
@@ -272,7 +272,7 @@ mod test {
                 tx: tx2,
                 prevouts: vec![output],
                 input_idx: 0,
-                taproot_annex_scriptleaf: Some((TapLeafHash::all_zeros(), None)),
+                taproot_annex_scriptleaf: Some((TapLeafHash::from_script(Script::from(script), LeafVersion::TapScript), None)),
             },
             input.witness,
         );
