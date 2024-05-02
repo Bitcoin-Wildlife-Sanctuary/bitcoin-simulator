@@ -4,6 +4,4 @@ pub mod database;
 
 pub mod spending_requirements;
 
-pub mod covenants;
-
 define_pushable!();
