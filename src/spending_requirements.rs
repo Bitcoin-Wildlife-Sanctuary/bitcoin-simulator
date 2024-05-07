@@ -138,7 +138,6 @@ mod test {
     use crate::pushable;
     use crate::spending_requirements::{P2TRChecker, P2WSHChecker};
     use bitcoin::absolute::LockTime;
-    use bitcoin::hashes::Hash;
     use bitcoin::key::UntweakedPublicKey;
     use bitcoin::script::scriptint_vec;
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
@@ -272,7 +271,7 @@ mod test {
                 tx: tx2,
                 prevouts: vec![output],
                 input_idx: 0,
-                taproot_annex_scriptleaf: Some((TapLeafHash::from_script(Script::from(script), LeafVersion::TapScript), None)),
+                taproot_annex_scriptleaf: Some((TapLeafHash::from_script(&Script::from_bytes(script.as_bytes()), LeafVersion::TapScript), None)),
             },
             input.witness,
         );
