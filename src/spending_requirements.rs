@@ -1,14 +1,22 @@
 use anyhow::{Error, Result};
 use bitcoin::key::TweakedPublicKey;
-use bitcoin::taproot::ControlBlock;
-use bitcoin::{secp256k1, Script, ScriptBuf, Witness, WitnessProgram, XOnlyPublicKey};
+use bitcoin::taproot::{ControlBlock, LeafVersion};
+use bitcoin::{
+    secp256k1, Script, ScriptBuf, TapLeafHash, Transaction, TxOut, Witness, WitnessProgram,
+    XOnlyPublicKey,
+};
 use bitcoin_scriptexec::{Exec, ExecCtx, Options, TxTemplate};
 
 pub struct P2WSHChecker;
 
 impl P2WSHChecker {
-    pub fn check(sig_pub_key: ScriptBuf, tx_template: TxTemplate, witness: Witness) -> Result<()> {
-        let witness_version = sig_pub_key.as_bytes()[0];
+    pub fn check(
+        tx: &Transaction,
+        prevouts: &[TxOut],
+        input_idx: usize,
+        witness: &Witness,
+    ) -> Result<()> {
+        let witness_version = prevouts[input_idx].script_pubkey.as_bytes()[0];
 
         if witness_version != 0 {
             return Err(Error::msg("The ScriptPubKey is not for P2WSH."));
@@ -31,11 +39,18 @@ impl P2WSHChecker {
         let witness_program = WitnessProgram::p2wsh(&Script::from_bytes(&script));
         let sig_pub_key_expected = ScriptBuf::new_witness_program(&witness_program);
 
-        if sig_pub_key != sig_pub_key_expected {
+        if *prevouts[input_idx].script_pubkey != sig_pub_key_expected {
             return Err(Error::msg(
                 "The script does not match the script public key.",
             ));
         }
+
+        let tx_template = TxTemplate {
+            tx: tx.clone(),
+            prevouts: prevouts.to_vec(),
+            input_idx,
+            taproot_annex_scriptleaf: None,
+        };
 
         let mut exec = Exec::new(
             ExecCtx::SegwitV0,
@@ -62,8 +77,13 @@ impl P2WSHChecker {
 pub struct P2TRChecker;
 
 impl P2TRChecker {
-    pub fn check(sig_pub_key: ScriptBuf, tx_template: TxTemplate, witness: Witness) -> Result<()> {
-        let sig_pub_key_bytes = sig_pub_key.as_bytes();
+    pub fn check(
+        tx: &Transaction,
+        prevouts: &[TxOut],
+        input_idx: usize,
+        witness: &Witness,
+    ) -> Result<()> {
+        let sig_pub_key_bytes = prevouts[input_idx].script_pubkey.as_bytes();
 
         let witness_version = sig_pub_key_bytes[0];
         if witness_version != 0x51 {
@@ -82,8 +102,6 @@ impl P2TRChecker {
         if witness.len() >= 2 && witness[witness.len() - 1][0] == 0x50 {
             annex = Some(witness.pop().unwrap());
         }
-
-        _ = annex;
 
         if witness.len() == 1 {
             return Err(Error::msg(
@@ -110,6 +128,16 @@ impl P2TRChecker {
                 "The taproot commitment does not match the Taproot public key.",
             ));
         }
+
+        let tx_template = TxTemplate {
+            tx: tx.clone(),
+            prevouts: prevouts.to_vec(),
+            input_idx,
+            taproot_annex_scriptleaf: Some((
+                TapLeafHash::from_script(script, LeafVersion::TapScript),
+                annex,
+            )),
+        };
 
         let mut exec = Exec::new(
             ExecCtx::Tapscript,
@@ -143,11 +171,9 @@ mod test {
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{
-        Amount, OutPoint, Script, ScriptBuf, Sequence, TapLeafHash, TxIn, TxOut, Witness,
-        WitnessProgram,
+        Amount, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut, Witness, WitnessProgram,
     };
     use bitcoin_script::script;
-    use bitcoin_scriptexec::TxTemplate;
     use std::str::FromStr;
 
     #[test]
@@ -192,16 +218,7 @@ mod test {
             output: vec![],
         };
 
-        let res = P2WSHChecker::check(
-            output.script_pubkey.clone(),
-            TxTemplate {
-                tx: tx2,
-                prevouts: vec![output],
-                input_idx: 0,
-                taproot_annex_scriptleaf: None,
-            },
-            input.witness,
-        );
+        let res = P2WSHChecker::check(&tx2, &[output], 0, &input.witness);
         assert!(res.is_ok());
     }
 
@@ -265,16 +282,7 @@ mod test {
             output: vec![],
         };
 
-        let res = P2TRChecker::check(
-            output.script_pubkey.clone(),
-            TxTemplate {
-                tx: tx2,
-                prevouts: vec![output],
-                input_idx: 0,
-                taproot_annex_scriptleaf: Some((TapLeafHash::from_script(&Script::from_bytes(script.as_bytes()), LeafVersion::TapScript), None)),
-            },
-            input.witness,
-        );
+        let res = P2TRChecker::check(&tx2, &[output], 0, &input.witness);
         assert!(res.is_ok());
     }
 }
