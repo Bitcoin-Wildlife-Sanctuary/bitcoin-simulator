@@ -6,9 +6,13 @@ edition = "2021"
 [dependencies]
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 anyhow = "1.0.82"
-bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin", branch = "bitvm" }
+bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin", branch = "bitvm", features = ["rand"] }
 bitcoin-script = { git = "https://github.com/BitVM/rust-bitcoin-script" }
 bitcoin-scriptexec = { git = "https://github.com/BitVM/rust-bitcoin-scriptexec" }
+
+[dev-dependencies]
+rand = "0.8.5"
+rand_chacha = "0.3.1"
 
 [profile.dev]
 opt-level = 3

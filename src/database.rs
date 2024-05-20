@@ -1,4 +1,4 @@
-use crate::spending_requirements::{P2TRChecker, P2WSHChecker};
+use crate::spending_requirements::{P2TRChecker, P2WPKHChecker, P2WSHChecker};
 use anyhow::{Error, Result};
 use bitcoin::consensus::Encodable;
 use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
@@ -133,11 +133,13 @@ impl Database {
             prev_outs.push(prev_out);
         }
 
-        for (input_idx, input) in tx.input.iter().enumerate() {
-            if prev_outs[input_idx].script_pubkey.is_p2wsh() {
-                P2WSHChecker::check(&tx, &prev_outs, input_idx, &input.witness)?;
+        for input_idx in 0..tx.input.len() {
+            if prev_outs[input_idx].script_pubkey.is_p2wpkh() {
+                P2WPKHChecker::check(&tx, &prev_outs, input_idx)?;
+            } else if prev_outs[input_idx].script_pubkey.is_p2wsh() {
+                P2WSHChecker::check(&tx, &prev_outs, input_idx)?;
             } else if prev_outs[input_idx].script_pubkey.is_p2tr() {
-                P2TRChecker::check(&tx, &prev_outs, input_idx, &input.witness)?;
+                P2TRChecker::check(&tx, &prev_outs, input_idx)?;
             }
         }
 
@@ -159,15 +161,95 @@ mod test {
     use crate::database::Database;
     use crate::pushable;
     use bitcoin::absolute::LockTime;
-    use bitcoin::key::UntweakedPublicKey;
+    use bitcoin::ecdsa::Signature;
+    use bitcoin::key::{Secp256k1, UntweakedPublicKey};
     use bitcoin::script::scriptint_vec;
+    use bitcoin::secp256k1::{Message, SecretKey};
+    use bitcoin::sighash::SighashCache;
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{
-        Amount, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut, Witness, WitnessProgram,
+        Amount, EcdsaSighashType, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut, Witness,
+        WitnessProgram,
     };
     use bitcoin_script::script;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
     use std::str::FromStr;
+
+    #[test]
+    fn test_p2wpkh() {
+        let db = Database::connect_temporary_database().unwrap();
+
+        let mut prng = ChaCha20Rng::seed_from_u64(0);
+
+        let secp = Secp256k1::new();
+
+        let sk = SecretKey::new(&mut prng);
+        let pk = sk.public_key(&secp);
+
+        let wpkh = bitcoin::PublicKey::new(pk).wpubkey_hash().unwrap();
+
+        let output = TxOut {
+            value: Amount::from_sat(1_000_000_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&wpkh),
+        };
+
+        let tx = bitcoin::Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![output.clone()],
+        };
+
+        let tx_id = tx.compute_txid();
+
+        db.insert_transaction_unconditionally(&tx).unwrap();
+
+        assert_eq!(
+            db.check_if_output_is_spent(&tx_id.to_string(), 0).unwrap(),
+            false
+        );
+
+        let input = TxIn {
+            previous_output: OutPoint {
+                txid: tx_id,
+                vout: 0,
+            },
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::default(),
+            witness: Witness::default(),
+        };
+
+        let mut tx2 = bitcoin::Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![input.clone()],
+            output: vec![],
+        };
+
+        let sighash_type = EcdsaSighashType::All;
+        let mut sighashcache = SighashCache::new(tx2.clone());
+        let h = sighashcache
+            .p2wpkh_signature_hash(0, &output.script_pubkey, output.value, sighash_type)
+            .unwrap();
+
+        let msg = Message::from(h);
+        let signature = Signature {
+            signature: secp.sign_ecdsa(&msg, &sk),
+            sighash_type,
+        };
+
+        tx2.input[0].witness = Witness::p2wpkh(&signature, &pk);
+
+        assert!(db.verify_transaction(&tx2).is_ok());
+        db.insert_transaction_unconditionally(&tx2).unwrap();
+
+        assert_eq!(
+            db.check_if_output_is_spent(&tx_id.to_string(), 0).unwrap(),
+            true
+        );
+    }
 
     #[test]
     fn test_p2wsh() {

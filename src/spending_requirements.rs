@@ -1,28 +1,76 @@
 use anyhow::{Error, Result};
+use bitcoin::ecdsa::Signature;
 use bitcoin::key::TweakedPublicKey;
+use bitcoin::opcodes::all::OP_PUSHBYTES_20;
+use bitcoin::secp256k1::Message;
+use bitcoin::sighash::SighashCache;
 use bitcoin::taproot::{ControlBlock, LeafVersion};
 use bitcoin::{
-    secp256k1, Script, ScriptBuf, TapLeafHash, Transaction, TxOut, Witness, WitnessProgram,
-    XOnlyPublicKey,
+    secp256k1, CompressedPublicKey, Script, ScriptBuf, TapLeafHash, Transaction, TxOut,
+    WitnessProgram, XOnlyPublicKey,
 };
 use bitcoin_scriptexec::{Exec, ExecCtx, Options, TxTemplate};
+
+pub struct P2WPKHChecker;
+
+impl P2WPKHChecker {
+    pub fn check(tx: &Transaction, prevouts: &[TxOut], input_idx: usize) -> Result<()> {
+        if prevouts[input_idx].script_pubkey.len() != 22 {
+            return Err(Error::msg("The ScriptPubKey is not for P2WPKH."));
+        }
+
+        let witness_version = prevouts[input_idx].script_pubkey.as_bytes()[0];
+        let witness = &tx.input[input_idx].witness;
+
+        if witness.len() != 2 {
+            return Err(Error::msg("The number of witness elements should be exactly two (the signature and the public key)."));
+        }
+
+        if witness_version != 0
+            || prevouts[input_idx].script_pubkey.as_bytes()[1] != OP_PUSHBYTES_20.to_u8()
+        {
+            return Err(Error::msg("The ScriptPubKey is not for P2WPKH."));
+        }
+
+        let pk = CompressedPublicKey::from_slice(&witness[1])?;
+
+        let wpkh = pk.wpubkey_hash();
+
+        if !prevouts[input_idx].script_pubkey.as_bytes()[2..22].eq(AsRef::<[u8]>::as_ref(&wpkh)) {
+            return Err(Error::msg(
+                "The script does not match the script public key.",
+            ));
+        }
+
+        let sig = Signature::from_slice(&witness[0])?;
+
+        let mut sighashcache = SighashCache::new(tx.clone());
+        let h = sighashcache.p2wpkh_signature_hash(
+            input_idx,
+            &ScriptBuf::new_p2wpkh(&wpkh),
+            prevouts[input_idx].value,
+            sig.sighash_type,
+        )?;
+
+        let msg = Message::from(h);
+        let secp = secp256k1::Secp256k1::verification_only();
+        pk.verify(&secp, &msg, &sig)?;
+
+        Ok(())
+    }
+}
 
 pub struct P2WSHChecker;
 
 impl P2WSHChecker {
-    pub fn check(
-        tx: &Transaction,
-        prevouts: &[TxOut],
-        input_idx: usize,
-        witness: &Witness,
-    ) -> Result<()> {
+    pub fn check(tx: &Transaction, prevouts: &[TxOut], input_idx: usize) -> Result<()> {
         let witness_version = prevouts[input_idx].script_pubkey.as_bytes()[0];
 
         if witness_version != 0 {
             return Err(Error::msg("The ScriptPubKey is not for P2WSH."));
         }
 
-        let mut witness = witness.to_vec();
+        let mut witness = tx.input[input_idx].witness.to_vec();
 
         if witness.len() < 2 {
             return Err(Error::msg("The number of witness elements should be at least two (the empty placeholder and the script)."));
@@ -77,12 +125,7 @@ impl P2WSHChecker {
 pub struct P2TRChecker;
 
 impl P2TRChecker {
-    pub fn check(
-        tx: &Transaction,
-        prevouts: &[TxOut],
-        input_idx: usize,
-        witness: &Witness,
-    ) -> Result<()> {
+    pub fn check(tx: &Transaction, prevouts: &[TxOut], input_idx: usize) -> Result<()> {
         let sig_pub_key_bytes = prevouts[input_idx].script_pubkey.as_bytes();
 
         let witness_version = sig_pub_key_bytes[0];
@@ -96,7 +139,7 @@ impl P2TRChecker {
             ));
         }
 
-        let mut witness = witness.to_vec();
+        let mut witness = tx.input[input_idx].witness.to_vec();
         let mut annex: Option<Vec<u8>> = None;
 
         if witness.len() >= 2 && witness[witness.len() - 1][0] == 0x50 {
@@ -164,17 +207,83 @@ impl P2TRChecker {
 #[cfg(test)]
 mod test {
     use crate::pushable;
-    use crate::spending_requirements::{P2TRChecker, P2WSHChecker};
+    use crate::spending_requirements::{P2TRChecker, P2WPKHChecker, P2WSHChecker};
     use bitcoin::absolute::LockTime;
+    use bitcoin::ecdsa::Signature;
     use bitcoin::key::UntweakedPublicKey;
     use bitcoin::script::scriptint_vec;
+    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    use bitcoin::sighash::SighashCache;
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
     use bitcoin::{
-        Amount, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut, Witness, WitnessProgram,
+        Amount, EcdsaSighashType, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut, Witness,
+        WitnessProgram,
     };
     use bitcoin_script::script;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
     use std::str::FromStr;
+
+    #[test]
+    fn test_p2wpkh() {
+        let mut prng = ChaCha20Rng::seed_from_u64(0);
+
+        let secp = Secp256k1::new();
+
+        let sk = SecretKey::new(&mut prng);
+        let pk = sk.public_key(&secp);
+
+        let wpkh = bitcoin::PublicKey::new(pk).wpubkey_hash().unwrap();
+
+        let output = TxOut {
+            value: Amount::from_sat(1_000_000_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&wpkh),
+        };
+
+        let tx = bitcoin::Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![output.clone()],
+        };
+
+        let tx_id = tx.compute_txid();
+
+        let input = TxIn {
+            previous_output: OutPoint {
+                txid: tx_id,
+                vout: 0,
+            },
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::default(),
+            witness: Witness::default(),
+        };
+
+        let mut tx2 = bitcoin::Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![input.clone()],
+            output: vec![],
+        };
+
+        let sighash_type = EcdsaSighashType::All;
+        let mut sighashcache = SighashCache::new(tx2.clone());
+        let h = sighashcache
+            .p2wpkh_signature_hash(0, &output.script_pubkey, output.value, sighash_type)
+            .unwrap();
+
+        let msg = Message::from(h);
+        let signature = Signature {
+            signature: secp.sign_ecdsa(&msg, &sk),
+            sighash_type,
+        };
+
+        tx2.input[0].witness = Witness::p2wpkh(&signature, &pk);
+
+        let res = P2WPKHChecker::check(&tx2, &[output], 0);
+        assert!(res.is_ok());
+    }
 
     #[test]
     fn test_p2wsh() {
@@ -191,7 +300,7 @@ mod test {
         };
 
         let tx = bitcoin::Transaction {
-            version: Version(1),
+            version: Version::ONE,
             lock_time: LockTime::ZERO,
             input: vec![],
             output: vec![output.clone()],
@@ -212,13 +321,13 @@ mod test {
         };
 
         let tx2 = bitcoin::Transaction {
-            version: Version(1),
+            version: Version::ONE,
             lock_time: LockTime::ZERO,
             input: vec![input.clone()],
             output: vec![],
         };
 
-        let res = P2WSHChecker::check(&tx2, &[output], 0, &input.witness);
+        let res = P2WSHChecker::check(&tx2, &[output], 0);
         assert!(res.is_ok());
     }
 
@@ -248,7 +357,7 @@ mod test {
         };
 
         let tx = bitcoin::Transaction {
-            version: Version(1),
+            version: Version::ONE,
             lock_time: LockTime::ZERO,
             input: vec![],
             output: vec![output.clone()],
@@ -276,13 +385,13 @@ mod test {
         };
 
         let tx2 = bitcoin::Transaction {
-            version: Version(1),
+            version: Version::ONE,
             lock_time: LockTime::ZERO,
             input: vec![input.clone()],
             output: vec![],
         };
 
-        let res = P2TRChecker::check(&tx2, &[output], 0, &input.witness);
+        let res = P2TRChecker::check(&tx2, &[output], 0);
         assert!(res.is_ok());
     }
 }
