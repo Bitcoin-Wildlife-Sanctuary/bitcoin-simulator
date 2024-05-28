@@ -169,7 +169,7 @@ impl Database {
             )));
         }
 
-        let fee = output_sats - input_sats;
+        let fee = input_sats - output_sats;
         let weight = tx.weight().to_wu();
 
         if weight > policy.max_tx_weight as u64 {
