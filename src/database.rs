@@ -1,3 +1,4 @@
+use crate::policy::Policy;
 use crate::spending_requirements::{P2TRChecker, P2WPKHChecker, P2WSHChecker};
 use anyhow::{Error, Result};
 use bitcoin::consensus::Encodable;
@@ -112,6 +113,79 @@ impl Database {
                 "INSERT INTO outputs (tx_id, output_id, value, script_pub_key, is_spent) VALUES (?1, ?2, ?3, ?4, 0)",
                 params![tx_id, i, output.value.to_sat(), output.script_pubkey.to_bytes()]
             )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn check_fees(&self, tx: &Transaction, policy: &Policy) -> Result<()> {
+        let mut input_sats = 0;
+        for input in tx.input.iter() {
+            assert_eq!(
+                input.script_sig.len(),
+                0,
+                "Bitcoin simulator only verifies inputs that support segregated witness."
+            );
+
+            let prev_out = self.get_prev_output(
+                &input.previous_output.txid.to_string(),
+                input.previous_output.vout,
+            )?;
+            input_sats += prev_out.value.to_sat();
+        }
+
+        let mut output_sats = 0;
+        for output in tx.output.iter() {
+            if output.script_pubkey.is_op_return() {
+                if !policy.allow_data_carrier_via_op_return {
+                    return Err(Error::msg("The policy discourages using OP_RETURN to carry data as a spam filter may reject it."));
+                }
+                // otherwise, the dust amount is zero for OP_RETURN.
+            } else if output.script_pubkey.is_p2wsh() {
+                if policy.require_dust_amount && output.value.to_sat() < (67 + 8 + 1 + 34) * 3 {
+                    return Err(Error::msg(format!("P2WSH output has a dust amount requirement of 330 sats, but one provided output only has {} sats.", output.value.to_sat())));
+                }
+            } else if output.script_pubkey.is_p2wpkh() {
+                if policy.require_dust_amount && output.value.to_sat() < (67 + 8 + 1 + 22) * 3 {
+                    return Err(Error::msg(format!("P2WPKH output has a dust amount requirement of 294 sats, but one provided output only has {} sats.", output.value.to_sat())));
+                }
+            } else if output.script_pubkey.is_p2tr() {
+                if policy.require_dust_amount && output.value.to_sat() < (67 + 8 + 1 + 34) * 3 {
+                    return Err(Error::msg(format!("P2TR output has a dust amount requirement of 330 sats, but one provided output only has {} sats.", output.value.to_sat())));
+                }
+            } else {
+                return Err(Error::msg(
+                    "Bitcoin simulator only supports P2WSH, P2WPKH, and P2TR outputs.",
+                ));
+            }
+
+            output_sats += output.value.to_sat();
+        }
+
+        if output_sats > input_sats {
+            return Err(Error::msg(format!(
+                "The output balance {} sats exceeds the input balance {} sats.",
+                output_sats, input_sats
+            )));
+        }
+
+        let fee = output_sats - input_sats;
+        let weight = tx.weight().to_wu();
+
+        if weight > policy.max_tx_weight as u64 {
+            return Err(Error::msg(format!(
+                "The transaction weight units {} exceed the standard policy limit {}.",
+                weight, policy.max_tx_weight
+            )));
+        }
+
+        let vbytes = tx.vsize() as u64;
+        if fee < vbytes * policy.sat_per_vbyte as u64 {
+            return Err(Error::msg(format!(
+                "The transaction fee is {} sats, but only {} sats are provided",
+                vbytes * policy.sat_per_vbyte as u64,
+                fee
+            )));
         }
 
         Ok(())
