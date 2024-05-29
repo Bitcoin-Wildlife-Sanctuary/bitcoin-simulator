@@ -237,7 +237,6 @@ mod test {
     use bitcoin::absolute::LockTime;
     use bitcoin::ecdsa::Signature;
     use bitcoin::key::{Secp256k1, UntweakedPublicKey};
-    use bitcoin::script::scriptint_vec;
     use bitcoin::secp256k1::{Message, SecretKey};
     use bitcoin::sighash::SighashCache;
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
@@ -247,6 +246,7 @@ mod test {
         WitnessProgram,
     };
     use bitcoin_script::script;
+    use bitcoin_scriptexec::utils::scriptint_vec;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
     use std::str::FromStr;
