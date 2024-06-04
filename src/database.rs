@@ -125,7 +125,18 @@ impl Database {
             |row| {
                 let body = row.get::<_, Vec<u8>>(0)?;
 
-                Ok(Transaction::consensus_decode(&mut body.as_slice()).unwrap())
+                let tx = match Transaction::consensus_decode(&mut body.as_slice()) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        return Err(rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Blob,
+                            Box::new(e),
+                        ))
+                    }
+                };
+
+                Ok(tx)
             },
         )?;
 
