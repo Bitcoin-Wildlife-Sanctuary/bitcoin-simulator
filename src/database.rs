@@ -1,7 +1,7 @@
 use crate::policy::Policy;
 use crate::spending_requirements::{P2TRChecker, P2WPKHChecker, P2WSHChecker};
 use anyhow::{Error, Result};
-use bitcoin::consensus::Encodable;
+use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -116,6 +116,19 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    pub fn get_transaction(&self, tx_id: &str) -> Result<Transaction> {
+        let res = self.conn.query_row(
+            "SELECT * FROM transactions WHERE tx_id = ?1",
+            params![tx_id],
+            |row| {
+                let body = row.get::<_, Vec<u8>>(2).unwrap();
+                Ok(Transaction::consensus_decode(&mut body.as_slice()).unwrap())
+            },
+        )?;
+
+        Ok(res)
     }
 
     pub fn check_fees(&self, tx: &Transaction, policy: &Policy) -> Result<()> {
