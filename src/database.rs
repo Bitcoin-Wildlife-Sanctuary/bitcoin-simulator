@@ -120,10 +120,11 @@ impl Database {
 
     pub fn get_transaction(&self, tx_id: &str) -> Result<Transaction> {
         let res = self.conn.query_row(
-            "SELECT * FROM transactions WHERE tx_id = ?1",
+            "SELECT body FROM transactions WHERE tx_id = ?1",
             params![tx_id],
             |row| {
-                let body = row.get::<_, Vec<u8>>(2).unwrap();
+                let body = row.get::<_, Vec<u8>>(0)?;
+
                 Ok(Transaction::consensus_decode(&mut body.as_slice()).unwrap())
             },
         )?;
@@ -298,6 +299,9 @@ mod test {
             false
         );
 
+        let read_tx = db.get_transaction(&tx_id.to_string()).unwrap();
+        assert_eq!(read_tx, tx);
+
         let input = TxIn {
             previous_output: OutPoint {
                 txid: tx_id,
@@ -336,6 +340,10 @@ mod test {
             db.check_if_output_is_spent(&tx_id.to_string(), 0).unwrap(),
             true
         );
+
+        let tx_id = tx2.compute_txid();
+        let read_tx = db.get_transaction(&tx_id.to_string()).unwrap();
+        assert_eq!(read_tx, tx2);
     }
 
     #[test]
@@ -370,6 +378,9 @@ mod test {
             false
         );
 
+        let read_tx = db.get_transaction(&tx_id.to_string()).unwrap();
+        assert_eq!(read_tx, tx);
+
         let mut witness = Witness::new();
         witness.push([]);
         witness.push(scriptint_vec(1234));
@@ -396,6 +407,10 @@ mod test {
             db.check_if_output_is_spent(&tx_id.to_string(), 0).unwrap(),
             true
         );
+
+        let tx_id = tx2.compute_txid();
+        let read_tx = db.get_transaction(&tx_id.to_string()).unwrap();
+        assert_eq!(read_tx, tx2);
     }
 
     #[test]
@@ -441,6 +456,9 @@ mod test {
             false
         );
 
+        let read_tx = db.get_transaction(&tx_id.to_string()).unwrap();
+        assert_eq!(read_tx, tx);
+
         let mut control_block_bytes = Vec::new();
         taproot_spend_info
             .control_block(&(script.clone(), LeafVersion::TapScript))
@@ -474,5 +492,9 @@ mod test {
             db.check_if_output_is_spent(&tx_id.to_string(), 0).unwrap(),
             true
         );
+
+        let tx_id = tx2.compute_txid();
+        let read_tx = db.get_transaction(&tx_id.to_string()).unwrap();
+        assert_eq!(read_tx, tx2);
     }
 }
