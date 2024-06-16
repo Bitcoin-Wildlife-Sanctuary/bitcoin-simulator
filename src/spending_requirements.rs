@@ -107,7 +107,7 @@ impl P2WSHChecker {
             ScriptBuf::from_bytes(script.to_vec()),
             witness,
         )
-        .map_err(|_| Error::msg("The script cannot be executed."))?;
+        .map_err(|e| Error::msg(format!("The script cannot be executed: {:?}", e)))?;
         loop {
             if exec.exec_next().is_err() {
                 break;
@@ -189,7 +189,7 @@ impl P2TRChecker {
             ScriptBuf::from_bytes(script_buf),
             witness,
         )
-        .map_err(|_| Error::msg("The script cannot be executed."))?;
+        .map_err(|e| Error::msg(format!("The script cannot be executed: {:?}", e)))?;
         loop {
             if exec.exec_next().is_err() {
                 break;
