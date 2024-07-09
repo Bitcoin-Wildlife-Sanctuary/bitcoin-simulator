@@ -197,6 +197,8 @@ impl P2TRChecker {
         }
         let res = exec.result().unwrap();
         if !res.success {
+            println!("{:?}", res.final_stack);
+            println!("{:?}", res.error);
             return Err(Error::msg("The script execution is not successful."));
         }
 

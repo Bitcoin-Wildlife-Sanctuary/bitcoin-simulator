@@ -8,7 +8,7 @@ rusqlite = { version = "0.31.0", features = ["bundled"] }
 anyhow = "1.0.82"
 bitcoin = { version = "0.32.0", features = ["rand"] }
 bitcoin-script = { git = "https://github.com/Bitcoin-Wildlife-Sanctuary/rust-bitcoin-script" }
-bitcoin-scriptexec = { git = "https://github.com/Bitcoin-Wildlife-Sanctuary/rust-bitcoin-scriptexec" }
+bitcoin-scriptexec = { git = "https://github.com/Bitcoin-Wildlife-Sanctuary/rust-bitcoin-scriptexec", features = ["debug"] }
 
 [dev-dependencies]
 rand = "0.8.5"
