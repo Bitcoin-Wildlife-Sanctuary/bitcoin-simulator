@@ -9,7 +9,7 @@ use bitcoin::{
     secp256k1, CompressedPublicKey, Script, ScriptBuf, TapLeafHash, Transaction, TxOut,
     WitnessProgram, XOnlyPublicKey,
 };
-use bitcoin_scriptexec::{Exec, ExecCtx, Options, TxTemplate};
+use bitcoin_scriptexec::{Exec, ExecCtx, execute_script_with_witness_and_tx_template, Options, TxTemplate};
 
 pub struct P2WPKHChecker;
 
@@ -182,23 +182,12 @@ impl P2TRChecker {
             )),
         };
 
-        let mut exec = Exec::new(
-            ExecCtx::Tapscript,
-            Options::default(),
-            tx_template,
+        let exec_result = execute_script_with_witness_and_tx_template(
             ScriptBuf::from_bytes(script_buf),
-            witness,
-        )
-        .map_err(|e| Error::msg(format!("The script cannot be executed: {:?}", e)))?;
-        loop {
-            if exec.exec_next().is_err() {
-                break;
-            }
-        }
-        let res = exec.result().unwrap();
-        if !res.success {
-            println!("{:?}", res.final_stack);
-            println!("{:?}", res.error);
+            tx_template,
+            witness
+        );
+        if !exec_result.success {
             return Err(Error::msg("The script execution is not successful."));
         }
 
