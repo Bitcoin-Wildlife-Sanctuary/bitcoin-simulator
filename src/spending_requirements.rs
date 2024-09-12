@@ -188,6 +188,7 @@ impl P2TRChecker {
             witness
         );
         if !exec_result.success {
+            println!("{:?}", exec_result.stats);
             return Err(Error::msg("The script execution is not successful."));
         }
 
