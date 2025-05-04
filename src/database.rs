@@ -143,6 +143,19 @@ impl Database {
         Ok(res)
     }
 
+    pub fn calculate_fees(&self, tx: &Transaction, policy: &Policy) -> Result<Amount> {
+        let weight = tx.weight().to_wu();
+        if weight > policy.max_tx_weight as u64 {
+            return Err(Error::msg(format!(
+                "The transaction weight units {} exceed the standard policy limit {}.",
+                weight, policy.max_tx_weight
+            )));
+        }
+        let vbytes = tx.vsize() as u64;
+        let fee = vbytes * policy.sat_per_vbyte as u64;
+        Ok(Amount::from_sat(fee))
+    }
+
     pub fn check_fees(&self, tx: &Transaction, policy: &Policy) -> Result<()> {
         let mut input_sats = 0;
         for input in tx.input.iter() {
@@ -195,21 +208,11 @@ impl Database {
         }
 
         let fee = input_sats - output_sats;
-        let weight = tx.weight().to_wu();
-
-        if weight > policy.max_tx_weight as u64 {
-            return Err(Error::msg(format!(
-                "The transaction weight units {} exceed the standard policy limit {}.",
-                weight, policy.max_tx_weight
-            )));
-        }
-
-        let vbytes = tx.vsize() as u64;
-        if fee < vbytes * policy.sat_per_vbyte as u64 {
+        let expected_fee = self.calculate_fees(&tx, &policy)?.to_sat();
+        if fee < expected_fee {
             return Err(Error::msg(format!(
                 "The transaction fee is {} sats, but only {} sats are provided",
-                vbytes * policy.sat_per_vbyte as u64,
-                fee
+                expected_fee, fee
             )));
         }
 

@@ -9,7 +9,9 @@ use bitcoin::{
     secp256k1, CompressedPublicKey, Script, ScriptBuf, TapLeafHash, Transaction, TxOut,
     WitnessProgram, XOnlyPublicKey,
 };
-use bitcoin_scriptexec::{Exec, ExecCtx, execute_script_with_witness_and_tx_template, Options, TxTemplate};
+use bitcoin_scriptexec::{
+    execute_script_with_witness_and_tx_template, Exec, ExecCtx, Options, TxTemplate,
+};
 
 pub struct P2WPKHChecker;
 
@@ -185,7 +187,7 @@ impl P2TRChecker {
         let exec_result = execute_script_with_witness_and_tx_template(
             ScriptBuf::from_bytes(script_buf),
             tx_template,
-            witness
+            witness,
         );
         if !exec_result.success {
             println!("{:?}", exec_result.stats);
